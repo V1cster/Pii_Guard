@@ -7,13 +7,13 @@ import random
 # --- 1. PAGE CONFIG & ETHICS ---
 st.set_page_config(page_title="PII-Guard Local", layout="wide")
 
-# This creates the 4-digit code you need for your ethics/feedback form
+# This creates the 4-digit code need for the ethics/feedback form
 if 'w_code' not in st.session_state:
     st.session_state.w_code = random.randint(1000, 9999)
 
 st.sidebar.title("🔐 Research Session")
 st.sidebar.info(f"Your Withdrawal Code: **{st.session_state.w_code}**")
-st.sidebar.write("Please keep this code for your feedback survey.")
+st.sidebar.write("Please make a note of this Code.")
 
 st.title("🛡️ PII-Guard: Local Privacy Shield")
 st.write("Analyze your social media posts for private data before you upload.")
@@ -22,11 +22,50 @@ st.write("Analyze your social media posts for private data before you upload.")
 # YOLO for Images (Local .pt file)
 image_model = YOLO("yolo11n.pt")
 
-# BERT for Text (Public model - will download to D: drive automatically)
-# We use 'dslim/bert-base-NER' because it is public and very stable.
+# [NEW] Load BART for Intent Analysis
+intent_classifier = pipeline("zero-shot-classification",
+                             model="facebook/bart-large-mnli")
+
+# BERT for Text (download to D: drive)
+# 'dslim/bert-base-NER' because it is public everything else is private and just won't load.
 text_pipe = pipeline("token-classification",
                      model="dslim/bert-base-NER",
                      aggregation_strategy="simple")
+
+# --- IMPROVED RISK SCORING FUNCTION ---
+
+
+def calculate_advanced_risk(text_results, i_results, user_text):
+    score = 0
+    alerts = []
+
+    # Analyze Intent (Context)
+    intent = intent_classifier(user_text, candidate_labels=[
+                               "home/private", "public/social"])
+    intent_label = intent['labels'][0]
+
+    # Multiplier: 2x risk if the AI thinks the person is at home
+    multiplier = 2.0 if intent_label == "home/private" else 1.0
+
+    # Check Text results
+    for res in text_results:
+        label = res.get('entity_group', 'Unknown')
+        if label == "LOC":
+            score += 25 * multiplier
+            alerts.append(f"Location found in {intent_label} context.")
+        if label == "PER":
+            score += 15
+            alerts.append("Personal Name detected.")
+
+    # Check Image results
+    has_person = any(i_results[0].names[int(b.cls)]
+                     == "person" for b in i_results[0].boxes)
+    if has_person:
+        score += 20 * multiplier
+        alerts.append(f"Recognizable face in {intent_label} setting.")
+
+    return min(score, 100), intent_label, alerts
+
 
 # --- 3. UI LAYOUT ---
 col1, col2 = st.columns(2)
@@ -68,27 +107,31 @@ with col2:
                 name = img_results[0].names[int(box.cls)]
                 st.write(f"• Detected: {name}")
 
-# --- 4. THE FUSION LOGIC (The 'Context' Step) ---
+# --- 4. THE FUSION LOGIC (giving the software context) ---
 st.divider()
 st.header("Step 3: Final Privacy Verdict")
 if st.button("Generate Risk Report"):
     if user_text and uploaded_file:
-        # Run text check
+        # Re-run scans for the fusion
         t_res = text_pipe(user_text)
-        labels = [r.get('entity_group') for r in t_res]
-
-        # Run image check
         i_res = image_model.predict(PIL.Image.open(uploaded_file))
-        has_person = any(i_res[0].names[int(b.cls)] ==
-                         "person" for b in i_res[0].boxes)
 
-        # Logic: If text has a Location and Image has a Person = High Risk
-        if "LOC" in labels and has_person:
-            st.error(
-                "🚨 CRITICAL: Contextual Leak! You are posting a recognizable face and a specific location.")
-        elif labels:
-            st.warning("⚠️ MEDIUM: Private identifiers found in text.")
+        # the Advanced Risk Brain
+        final_score, context, reasons = calculate_advanced_risk(
+            t_res, i_res, user_text)
+
+        st.subheader(f"Risk Score: {final_score}%")
+        st.write(f"**Detected Intent:** {context.upper()}")
+
+        for r in reasons:
+            st.write(f"- {r}")
+
+        if final_score > 70:
+            st.error("🚨 CRITICAL: High probability of a contextual privacy leak.")
+        elif final_score > 30:
+            st.warning(
+                "⚠️ MEDIUM: Some risks detected. Consider redacting details.")
         else:
-            st.success("🟢 LOW: No major contextual leaks detected.")
+            st.success("🟢 LOW: No major contextual leaks found.")
     else:
         st.info("Complete Steps 1 & 2 first.")

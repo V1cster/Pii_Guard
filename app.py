@@ -2,21 +2,34 @@ import streamlit as st
 from ultralytics import YOLO
 from transformers import pipeline
 import PIL.Image
+from PIL.ExifTags import TAGS
 import random
 
 # --- 1. PAGE CONFIG & ETHICS ---
 st.set_page_config(page_title="PII-Guard Local", layout="wide")
 
-# This creates the 4-digit code need for the ethics/feedback form
+# Top Header with UoG Logo
+head1, head2 = st.columns([0.8, 0.2])
+with head1:
+    st.title("🛡️ PII-Guard: Local Privacy Shield")
+    st.write("Analyze your social media posts for private data before you upload.")
+with head2:
+    try:
+        st.image("uog_logo.png", width=150)
+    except:
+        st.info("🎓 UoG Logo Placeholder")
+
+# Ethics Sidebar
 if 'w_code' not in st.session_state:
     st.session_state.w_code = random.randint(1000, 9999)
 
 st.sidebar.title("🔐 Research Session")
 st.sidebar.info(f"Your Withdrawal Code: **{st.session_state.w_code}**")
-st.sidebar.write("Please make a note of this Code.")
+st.sidebar.write("Please keep this code for survey.")
 
-st.title("🛡️ PII-Guard: Local Privacy Shield")
-st.write("Analyze your social media posts for private data before you upload.")
+with st.expander("ℹ️ Privacy & Ethics Disclosure"):
+    st.write(
+        "All processing happens locally on your device. No data is sent to the cloud.")
 
 # --- 2. LOAD MODELS ---
 # YOLO for Images (Local .pt file)
@@ -100,6 +113,23 @@ with col2:
         image = PIL.Image.open(uploaded_file)
         st.image(image, caption="Current Image", use_container_width=True)
 
+        # deep dive logic looks at the EXIF data for coordinates or camera serial numbers
+        exif_data = image.getexif()
+        if exif_data:
+            has_gps = False
+            for tag_id in exif_data:
+                tag = TAGS.get(tag_id, tag_id)
+                if tag == 'GPSInfo':
+                    has_gps = True
+
+            if has_gps:
+                st.error("🚨 METADATA ALERT: This image contains embedded GPS coordinates. Sharing this file will reveal your exact location (longitude/latitude) even if your face is blurred.")
+            else:
+                st.info(
+                    "ℹ️ Metadata Check: No hidden GPS coordinates found in this file.")
+        else:
+            st.write("No metadata found in this image.")
+
         if st.button("Scan Image"):
             img_results = image_model.predict(image)
             st.subheader("Found Objects:")
@@ -112,26 +142,34 @@ st.divider()
 st.header("Step 3: Final Privacy Verdict")
 if st.button("Generate Risk Report"):
     if user_text and uploaded_file:
-        # Re-run scans for the fusion
+        # Re-run scans for the fusion logic
         t_res = text_pipe(user_text)
         i_res = image_model.predict(PIL.Image.open(uploaded_file))
 
-        # the Advanced Risk Brain
+        # Call the Advanced Risk Brain
         final_score, context, reasons = calculate_advanced_risk(
             t_res, i_res, user_text)
 
-        st.subheader(f"Risk Score: {final_score}%")
-        st.write(f"**Detected Intent:** {context.upper()}")
+        # --- [RISK METER] ---
+        st.subheader(f"Total Privacy Risk Score: {final_score}%")
 
+        # Use st.progress to create the visual meter
+        if final_score >= 75:
+            st.progress(final_score / 100, text="🔴 CRITICAL RISK")
+            st.error(
+                "Highly sensitive data combined with private context detected.")
+        elif final_score >= 35:
+            st.progress(final_score / 100, text="🟡 MEDIUM RISK")
+            st.warning("Potential PII detected. Review context before sharing.")
+        else:
+            st.progress(final_score / 100, text="🟢 LOW RISK")
+            st.success("No significant contextual leaks found.")
+
+        # Display the "Why" behind the score
+        st.write(f"**Detected Intent:** {context.upper()}")
+        st.write("**Risk Factors identified:**")
         for r in reasons:
             st.write(f"- {r}")
 
-        if final_score > 70:
-            st.error("🚨 CRITICAL: High probability of a contextual privacy leak.")
-        elif final_score > 30:
-            st.warning(
-                "⚠️ MEDIUM: Some risks detected. Consider redacting details.")
-        else:
-            st.success("🟢 LOW: No major contextual leaks found.")
     else:
-        st.info("Complete Steps 1 & 2 first.")
+        st.info("Please complete Steps 1 & 2 first to generate the report.")

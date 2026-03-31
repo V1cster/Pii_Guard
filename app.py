@@ -4,8 +4,13 @@ from transformers import pipeline
 import PIL.Image
 from PIL.ExifTags import TAGS
 import random
+# Handle iPhone HEIC files since a lot of people are going to be using Iphones
+import pillow_heif
 
-# --- 1. PAGE CONFIG & ETHICS ---
+# --- 1. INITIALIZE HEIC SUPPORT ---
+pillow_heif.register_heif_opener()
+
+# --- 2. PAGE CONFIG & ETHICS ---
 st.set_page_config(page_title="PII-Guard Local", layout="wide")
 
 # Top Header with UoG Logo
@@ -31,7 +36,7 @@ with st.expander("ℹ️ Privacy & Ethics Disclosure"):
     st.write(
         "All processing happens locally on your device. No data is sent to the cloud.")
 
-# --- 2. LOAD MODELS ---
+# --- 3. LOAD MODELS ---
 # YOLO for Images (Local .pt file)
 image_model = YOLO("yolo11n.pt")
 
@@ -80,7 +85,7 @@ def calculate_advanced_risk(text_results, i_results, user_text):
     return min(score, 100), intent_label, alerts
 
 
-# --- 3. UI LAYOUT ---
+# --- 4. UI LAYOUT ---
 col1, col2 = st.columns(2)
 
 with col1:
@@ -107,7 +112,7 @@ with col1:
 with col2:
     st.header("Step 2: Image Analysis")
     uploaded_file = st.file_uploader(
-        "Upload image:", type=["jpg", "jpeg", "png"])
+        "Upload image:", type=["jpg", "jpeg", "png", "heic"])
 
     if uploaded_file:
         image = PIL.Image.open(uploaded_file)
@@ -137,7 +142,7 @@ with col2:
                 name = img_results[0].names[int(box.cls)]
                 st.write(f"• Detected: {name}")
 
-# --- 4. THE FUSION LOGIC (giving the software context) ---
+# --- 5. THE FUSION LOGIC (giving the software context) ---
 st.divider()
 st.header("Step 3: Final Privacy Verdict")
 if st.button("Generate Risk Report"):

@@ -7,28 +7,28 @@ import random
 # Handle iPhone HEIC files since a lot of people are going to be using Iphones
 import pillow_heif
 
-# --- 1. INITIALIZE HEIC SUPPORT ---
+# 1. INITIALIZE HEIC SUPPORT
 pillow_heif.register_heif_opener()
 
-# --- 2. PAGE CONFIG & ETHICS ---
+# 2. PAGE CONFIG & ETHICS
 st.set_page_config(page_title="PII-Guard Local", layout="wide")
 
 # Top Header with UoG Logo
 head1, head2 = st.columns([0.8, 0.2])
 with head1:
-    st.title("🛡️ PII-Guard: Local Privacy Shield")
+    st.title("PII-Guard: Local Privacy Shield")
     st.write("Analyze your social media posts for private data before you upload.")
 with head2:
     try:
         st.image("uog_logo.png", width=150)
     except:
-        st.info("🎓 UoG Logo Placeholder")
+        st.info("UoG Logo Placeholder")
 
 # Ethics Sidebar
 if 'w_code' not in st.session_state:
     st.session_state.w_code = random.randint(1000, 9999)
 
-st.sidebar.title("🔐 Research Session")
+st.sidebar.title("Research Session")
 st.sidebar.info(f"Your Withdrawal Code: **{st.session_state.w_code}**")
 st.sidebar.write("Please keep this code for survey.")
 
@@ -36,24 +36,24 @@ with st.expander("ℹ️ Privacy & Ethics Disclosure"):
     st.write(
         "All processing happens locally on your device. No data is sent to the cloud.")
 
-# --- 3. LOAD MODELS ---
+# 3. LOAD MODELS
 # YOLO for Images (Local .pt file)
 image_model = YOLO("yolo11n.pt")
 
-# [NEW] Load BART for Intent Analysis
-intent_classifier = pipeline("zero-shot-classification",
-                             model="facebook/bart-large-mnli")
-
+# Swapped to DistilBERT: Bypasses the PyTorch Dynamo/Meta bug completely
+intent_classifier = pipeline(
+    "zero-shot-classification", 
+    model="typeform/distilbert-base-uncased-mnli", 
+    device="cpu"
+)
 # BERT for Text (download to D: drive)
 # 'dslim/bert-base-NER' because it is public everything else is private and just won't load.
 text_pipe = pipeline("token-classification",
                      model="dslim/bert-base-NER",
                      aggregation_strategy="simple")
 
-# --- IMPROVED RISK SCORING FUNCTION ---
-
-
-def calculate_advanced_risk(text_results, i_results, user_text):
+# IMPROVED RISK SCORING FUNCTION
+def calculate_advanced_risk(text_results, i_results, user_text, image):
     score = 0
     alerts = []
 
@@ -75,6 +75,16 @@ def calculate_advanced_risk(text_results, i_results, user_text):
             score += 15
             alerts.append("Personal Name detected.")
 
+    # Check Metadata (EXIF) inside the brain!
+    exif_data = image.getexif()
+    if exif_data:
+        for tag_id in exif_data:
+            tag = TAGS.get(tag_id, tag_id)
+            if tag == 'GPSInfo':
+                score += 50  # Massive penalty for hidden GPS
+                alerts.append("🚨 HIDDEN METADATA: Exact GPS Coordinates detected.")
+                break # Only need to trigger this once
+
     # Check Image results
     has_person = any(i_results[0].names[int(b.cls)]
                      == "person" for b in i_results[0].boxes)
@@ -83,7 +93,6 @@ def calculate_advanced_risk(text_results, i_results, user_text):
         alerts.append(f"Recognizable face in {intent_label} setting.")
 
     return min(score, 100), intent_label, alerts
-
 
 # --- 4. UI LAYOUT ---
 col1, col2 = st.columns(2)
@@ -103,9 +112,9 @@ with col1:
                     label = res.get('entity_group', 'Unknown')
                     score = res['score']
                     st.warning(
-                        f"⚠️ {label} detected (Confidence: {score:.2f})")
+                        f" {label} detected (Confidence: {score:.2f})")
             else:
-                st.success("✅ No PII detected in text.")
+                st.success(" No PII detected in text.")
         else:
             st.error("Please enter text first.")
 
@@ -128,10 +137,10 @@ with col2:
                     has_gps = True
 
             if has_gps:
-                st.error("🚨 METADATA ALERT: This image contains embedded GPS coordinates. Sharing this file will reveal your exact location (longitude/latitude) even if your face is blurred.")
+                st.error(" METADATA ALERT: This image contains embedded GPS coordinates. Sharing this file will reveal your exact location (longitude/latitude) even if your face is blurred.")
             else:
                 st.info(
-                    "ℹ️ Metadata Check: No hidden GPS coordinates found in this file.")
+                    "Metadata Check: No hidden GPS coordinates found in this file.")
         else:
             st.write("No metadata found in this image.")
 
@@ -149,25 +158,28 @@ if st.button("Generate Risk Report"):
     if user_text and uploaded_file:
         # Re-run scans for the fusion logic
         t_res = text_pipe(user_text)
-        i_res = image_model.predict(PIL.Image.open(uploaded_file))
+        
+        # Open the image object so we can pass it to the risk calculator
+        opened_image = PIL.Image.open(uploaded_file)
+        i_res = image_model.predict(opened_image)
 
-        # Call the Advanced Risk Brain
+        # Call the Advanced Risk Brain (Now passing 'opened_image')
         final_score, context, reasons = calculate_advanced_risk(
-            t_res, i_res, user_text)
+            t_res, i_res, user_text, opened_image)
 
-        # --- [RISK METER] ---
+        # --- [RISK METER]
         st.subheader(f"Total Privacy Risk Score: {final_score}%")
 
         # Use st.progress to create the visual meter
         if final_score >= 75:
-            st.progress(final_score / 100, text="🔴 CRITICAL RISK")
+            st.progress(final_score / 100.0, text="🔴 CRITICAL RISK")
             st.error(
                 "Highly sensitive data combined with private context detected.")
         elif final_score >= 35:
-            st.progress(final_score / 100, text="🟡 MEDIUM RISK")
+            st.progress(final_score / 100.0, text="🟡 MEDIUM RISK")
             st.warning("Potential PII detected. Review context before sharing.")
         else:
-            st.progress(final_score / 100, text="🟢 LOW RISK")
+            st.progress(final_score / 100.0, text="🟢 LOW RISK")
             st.success("No significant contextual leaks found.")
 
         # Display the "Why" behind the score
